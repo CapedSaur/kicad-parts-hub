@@ -1,0 +1,669 @@
+# KiCad Parts Hub - a modified version of Import-LIB-KiCad-Plugin by Steffen-W
+# (https://github.com/Steffen-W/Import-LIB-KiCad-Plugin), GPL-3.0.
+# Modified on 2026-10-17; see NOTICE.md for the list of changes.
+"""
+KiCad Settings Paths and Application Interface Module
+
+Provides utilities for detecting KiCad settings paths across different operating systems
+and a simplified interface for interacting with KiCad applications.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import platform
+import sys
+from pathlib import Path
+from typing import Any, Callable
+
+
+class KiCadSettingsPaths:
+    """Utility class for detecting KiCad settings paths across different operating systems."""
+
+    @staticmethod
+    def get_default_settings_path() -> Path:
+        """Returns the default settings path for the current operating system."""
+        system = platform.system()
+        home = Path.home()
+
+        if system == "Windows":
+            return home / "AppData" / "Roaming" / "kicad"
+        elif system == "Darwin":  # macOS
+            return home / "Library" / "Preferences" / "kicad"
+        else:  # Linux and Unix-like systems
+            # Check XDG_CONFIG_HOME environment variable
+            xdg_config = os.environ.get("XDG_CONFIG_HOME")
+            if xdg_config:
+                return Path(xdg_config) / "kicad"
+            return home / ".config" / "kicad"
+
+    @staticmethod
+    def find_all_possible_paths() -> list[Path]:
+        """Discovers all possible KiCad settings paths on the current system."""
+        paths: list[Path] = []
+        system = platform.system()
+        home = Path.home()
+
+        try:
+            if system == "Windows":
+                base_paths = [
+                    home / "AppData" / "Roaming" / "kicad",
+                    home / "AppData" / "Local" / "kicad",
+                    Path("C:/ProgramData/kicad"),
+                ]
+                paths.extend(base_paths)
+
+                # Version-specific subdirectories
+                roaming_kicad = home / "AppData" / "Roaming" / "kicad"
+                if roaming_kicad.exists():
+                    for major in range(5, 12):
+                        for minor in range(0, 10):
+                            version_path = roaming_kicad / f"{major}.{minor}"
+                            if version_path.exists():
+                                paths.append(version_path)
+
+            elif system == "Darwin":  # macOS
+                paths.extend(
+                    [
+                        home / "Library" / "Preferences" / "kicad",
+                        home / "Library" / "Application Support" / "kicad",
+                    ]
+                )
+
+            else:  # Linux and Unix-like systems
+                paths.extend(
+                    [
+                        home / ".config" / "kicad",
+                        home / ".kicad",
+                        Path("/usr/share/kicad"),
+                        Path("/usr/local/share/kicad"),
+                    ]
+                )
+
+                # Check XDG_CONFIG_HOME
+                xdg_config = os.environ.get("XDG_CONFIG_HOME")
+                if xdg_config:
+                    xdg_kicad_path = Path(xdg_config) / "kicad"
+                    if xdg_kicad_path not in paths:
+                        paths.append(xdg_kicad_path)
+
+        except (OSError, PermissionError) as e:
+            logging.warning(f"Error accessing paths during discovery: {e}")
+
+        return [path for path in paths if path.exists()]
+
+    @staticmethod
+    def find_actual_settings_path() -> Path:
+        """
+        Locates the actual KiCad settings path by searching for configuration files.
+        Returns the default path if no actual settings are found.
+        """
+        possible_paths = KiCadSettingsPaths.find_all_possible_paths()
+        config_files = [
+            "kicad_common.json",
+            "eeschema.json",
+            "pcbnew.json",
+            "kicad.json",
+        ]
+
+        for path in possible_paths:
+            try:
+                for config_file in config_files:
+                    config_path = path / config_file
+                    if config_path.is_file():
+                        return path
+            except (OSError, PermissionError):
+                continue
+
+        return KiCadSettingsPaths.get_default_settings_path()
+
+
+class KiCadVersionInfo:
+    """Container for KiCad version information."""
+
+    def __init__(self, version_tuple: tuple[int, int, int], full_version: str):
+        self.major, self.minor, self.patch = version_tuple
+        self.version_tuple = version_tuple
+        self.full_version = full_version
+
+    def __str__(self) -> str:
+        return f"{self.major}.{self.minor}.{self.patch}"
+
+    def __repr__(self) -> str:
+        return f"KiCadVersionInfo({self.version_tuple}, '{self.full_version}')"
+
+
+class KiCadProjectInfo:
+    """Container for KiCad project information."""
+
+    def __init__(
+        self,
+        name: str | None = None,
+        directory: Path | None = None,
+        board_filename: Path | None = None,
+    ):
+        self.name = name
+        self.directory = directory
+        self.board_filename = board_filename
+
+    @property
+    def is_valid(self) -> bool:
+        """Returns True if project information is available."""
+        return any([self.name, self.directory, self.board_filename])
+
+    @property
+    def directory_str(self) -> str | None:
+        """Returns directory as string for backward compatibility."""
+        return str(self.directory) if self.directory else None
+
+    @property
+    def board_filename_str(self) -> str | None:
+        """Returns board filename as string for backward compatibility."""
+        return str(self.board_filename) if self.board_filename else None
+
+
+class KiCadApp:
+    """
+    Simplified KiCad application interface with direct property access.
+
+    All properties are loaded during initialization and can be accessed directly:
+    - app.connection_type: "IPC", "SWIG", or "FALLBACK"
+    - app.settings_path: Path to KiCad settings directory
+    - app.version_info: KiCadVersionInfo object with version details
+    - app.project_info: KiCadProjectInfo object with project details
+    - app.is_connected: Boolean indicating if KiCad connection is available
+    """
+
+    def __init__(self, prefer_ipc: bool = True, min_version: str = "8.0.0"):
+        """
+        Initializes the KiCad application interface and loads all properties.
+
+        Args:
+            prefer_ipc: Whether to prefer IPC API over SWIG bindings
+            min_version: Minimum required KiCad version
+        """
+        self.min_version = min_version
+        self.connection_type: str = "FALLBACK"
+        self.pcbnew: Any | None = None
+        self.kicad_ipc: Any | None = None
+        self.kipy_errors: Any | None = None
+
+        # Initialize all properties with default values
+        self.settings_path: Path = KiCadSettingsPaths.find_actual_settings_path()
+        self.version_info: KiCadVersionInfo | None = None
+        self.project_info: KiCadProjectInfo = KiCadProjectInfo()
+        self.is_connected: bool = False
+
+        # Try to establish connection and load properties
+        if prefer_ipc and self._try_init_ipc():
+            self.connection_type = "IPC"
+            self.is_connected = True
+            self._load_ipc_properties()
+        elif self._try_init_swig():
+            self.connection_type = "SWIG"
+            self.is_connected = True
+            self._load_swig_properties()
+        else:
+            logging.warning("Neither IPC API nor SWIG bindings available. Limited functionality.")
+
+    def _setup_venv_path(self) -> None:
+        """Sets up virtual environment path for IPC API imports."""
+        try:
+            venv = os.environ.get("VIRTUAL_ENV")
+            if venv:
+                venv_path = Path(venv)
+                version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+                venv_site_packages = venv_path / "lib" / version / "site-packages"
+
+                venv_site_packages_str = str(venv_site_packages)
+                if venv_site_packages_str in sys.path:
+                    sys.path.remove(venv_site_packages_str)
+                sys.path.insert(0, venv_site_packages_str)
+        except Exception as e:
+            logging.exception("Error setting up virtual environment path: %s", e)
+
+    def _try_init_ipc(self) -> bool:
+        """Attempts to initialize IPC API connection."""
+        try:
+            self._setup_venv_path()
+            from kipy import KiCad, errors
+
+            self.kipy_errors = errors
+            self.kicad_ipc = KiCad()
+
+            # Test connection
+            if self.kicad_ipc is not None:
+                self.kicad_ipc.get_version()
+            return True
+
+        except ImportError:
+            logging.debug("KiCad IPC API not available")
+            return False
+        except Exception as e:
+            logging.debug(f"KiCad IPC API initialization failed: {e}")
+            return False
+
+    def _try_init_swig(self) -> bool:
+        """Attempts to initialize SWIG (pcbnew) connection."""
+        try:
+            import pcbnew
+
+            self.pcbnew = pcbnew
+            return True
+        except ImportError:
+            logging.debug("SWIG bindings (pcbnew) not available")
+            return False
+        except Exception as e:
+            logging.debug(f"SWIG initialization failed: {e}")
+            return False
+
+    def _load_ipc_properties(self) -> None:
+        """Loads all properties using IPC API."""
+        if not self.kicad_ipc or not self.kipy_errors:
+            return
+
+        try:
+            # Version information
+            version_info = self.kicad_ipc.get_version()
+            version_tuple = (version_info.major, version_info.minor, version_info.patch)
+            self.version_info = KiCadVersionInfo(version_tuple, version_info.full_version)
+
+            # Project and board information
+            self._load_ipc_project_info()
+
+        except Exception as e:
+            logging.error(f"Error loading IPC properties: {e}")
+
+    def _load_swig_properties(self) -> None:
+        """Loads all properties using SWIG (pcbnew)."""
+        if not self.pcbnew:
+            return
+
+        try:
+            # Settings path
+            settings_manager = self.pcbnew.SETTINGS_MANAGER()
+            settings_path_str = settings_manager.GetUserSettingsPath()
+            self.settings_path = Path(settings_path_str)
+
+            # Version information
+            version_str = self.pcbnew.Version()
+            version_tuple = self._version_to_tuple(version_str)
+            full_version = self.pcbnew.FullVersion()
+            self.version_info = KiCadVersionInfo(version_tuple, full_version)
+
+            # Board and project information
+            self._load_swig_project_info()
+
+        except Exception as e:
+            logging.error(f"Error loading SWIG properties: {e}")
+
+    def _version_to_tuple(self, version_str: str) -> tuple[int, int, int]:
+        """Converts a version string to a tuple of integers."""
+        try:
+            clean_version = version_str.split("-")[0]
+            parts = clean_version.split(".")
+            # Ensure we have at least 3 parts
+            while len(parts) < 3:
+                parts.append("0")
+            return (int(parts[0]), int(parts[1]), int(parts[2]))
+        except (ValueError, AttributeError, TypeError, IndexError):
+            return (0, 0, 0)
+
+    def _load_ipc_project_info(self) -> None:
+        """Loads project info using IPC API.
+
+        Tries PCB editor first, then falls back to schematic editor,
+        so the plugin works when launched from either context.
+        """
+        if not self.kicad_ipc or not self.kipy_errors:
+            return
+
+        try:
+            from kipy.proto.common.types import DocumentType
+
+            docs = self.kicad_ipc.get_open_documents(DocumentType.DOCTYPE_PCB)
+            doc_type = "PCB"
+            if not docs:
+                docs = self.kicad_ipc.get_open_documents(DocumentType.DOCTYPE_SCHEMATIC)
+                doc_type = "Schematic"
+            if not docs:
+                logging.debug("IPC: no open PCB or Schematic document found, trying proc scan")
+                project_dir = self._find_project_via_process_args()
+                if project_dir:
+                    self.project_info = KiCadProjectInfo(
+                        name=project_dir.name, directory=project_dir
+                    )
+                else:
+                    self.project_info = KiCadProjectInfo()
+                return
+
+            doc = docs[0]
+            project_name = doc.project.name or None
+            project_dir = Path(doc.project.path) if doc.project.path else None
+            board_filename = (
+                Path(doc.board_filename) if doc_type == "PCB" and doc.board_filename else None
+            )
+
+            logging.debug(
+                f"IPC: found {doc_type} document - project='{project_name}' path='{project_dir}'"
+            )
+
+            self.project_info = KiCadProjectInfo(
+                name=project_name, directory=project_dir, board_filename=board_filename
+            )
+
+        except Exception as e:
+            # kipy errors and common API-shape issues are expected → DEBUG
+            # anything else (e.g. TypeError, NameError) signals a programming bug → WARNING
+            is_expected = type(e).__module__.startswith("kipy") or isinstance(
+                e, (AttributeError, RuntimeError)
+            )
+            logging.log(
+                logging.DEBUG if is_expected else logging.WARNING,
+                f"IPC project info unavailable ({e}), trying process scan",
+            )
+            project_dir = self._find_project_via_process_args()
+            self.project_info = (
+                KiCadProjectInfo(name=project_dir.name, directory=project_dir)
+                if project_dir
+                else KiCadProjectInfo()
+            )
+
+    @staticmethod
+    def _find_project_via_process_args() -> Path | None:
+        """Finds the KiCad project directory by inspecting running KiCad process arguments.
+
+        Uses /proc on Linux, ps on macOS, and psutil on Windows.
+        Also detects projects from .kicad_pcb/.kicad_sch arguments if no .kicad_pro is found.
+        Returns None on failure or if psutil is not available on Windows.
+        """
+        kicad_executables = {"kicad", "eeschema", "pcbnew"}
+        kicad_suffixes = {".kicad_pro", ".kicad_pcb", ".kicad_sch"}
+
+        def _check_args(args: list[str]) -> Path | None:
+            if not args:
+                return None
+            exe_name = Path(args[0]).name.lower()
+            if not any(k in exe_name for k in kicad_executables):
+                return None
+            pro_dir = None
+            fallback_dir = None
+            for arg in args[1:]:
+                try:
+                    p = Path(arg.strip('"'))
+                    suffix = p.suffix.lower()
+                    if suffix not in kicad_suffixes or not p.exists():
+                        continue
+                    if suffix == ".kicad_pro":
+                        pro_dir = p.parent
+                    else:
+                        # .kicad_pcb/.kicad_sch: check if a .kicad_pro exists nearby
+                        candidate = next(p.parent.glob("*.kicad_pro"), None)
+                        if candidate:
+                            pro_dir = candidate.parent
+                        else:
+                            fallback_dir = p.parent
+                except Exception:
+                    continue
+            return pro_dir or fallback_dir
+
+        try:
+            # psutil is cross-platform and returns pre-split args (handles spaces in paths
+            # correctly on all platforms). Use it first if available.
+            try:
+                import psutil
+
+                for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                    try:
+                        result = _check_args(proc.info["cmdline"] or [])
+                        if result:
+                            logging.debug(
+                                f"psutil: found project via PID {proc.info['pid']}: {result}"
+                            )
+                            return result
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+                return None
+
+            except ImportError:
+                pass  # fall through to platform-specific fallback
+
+            system = platform.system()
+
+            if system == "Linux":
+                for pid_dir in Path("/proc").iterdir():
+                    if not pid_dir.name.isdigit():
+                        continue
+                    try:
+                        cmdline = (pid_dir / "cmdline").read_text(
+                            encoding="utf-8", errors="replace"
+                        )
+                        args = [a for a in cmdline.split("\x00") if a]
+                        result = _check_args(args)
+                        if result:
+                            logging.debug(f"proc: found project via PID {pid_dir.name}: {result}")
+                            return result
+                    except (PermissionError, FileNotFoundError, OSError, UnicodeDecodeError):
+                        continue
+
+            elif system == "Darwin":
+                # Note: ps output does not preserve shell quoting, so paths with spaces
+                # in the project directory will not be found. Install psutil to fix this.
+                import shlex
+                import subprocess
+
+                out = subprocess.run(
+                    ["ps", "-A", "-o", "pid=,command="],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=3,
+                ).stdout
+                for line in out.splitlines():
+                    parts = line.strip().split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    try:
+                        args = shlex.split(parts[1])
+                    except ValueError:
+                        args = parts[1].split()
+                    result = _check_args(args)
+                    if result:
+                        logging.debug(f"ps: found project via PID {parts[0]}: {result}")
+                        return result
+
+            elif system == "Windows":
+                logging.debug("psutil not installed, cannot scan processes on Windows")
+
+        except Exception as e:
+            logging.debug(f"process scan failed: {e}")
+
+        return None
+
+    def _load_swig_project_info(self) -> None:
+        """Loads project info using SWIG."""
+        if not self.pcbnew:
+            return
+
+        try:
+            board = self.pcbnew.GetBoard()
+            if board is None:
+                raise ValueError("GetBoard() returned None")
+            board_filename_str = board.GetFileName()
+
+            project_name = None
+            project_dir = None
+            board_filename = None
+
+            if board_filename_str:
+                board_filename = Path(board_filename_str)
+                project_dir = board_filename.parent
+                project_name = board_filename.stem
+
+            if not project_dir:
+                project_dir = self._find_project_via_process_args()
+                if project_dir:
+                    project_name = project_dir.name
+                    logging.debug(f"SWIG: no board open, project found via proc: {project_dir}")
+
+            self.project_info = KiCadProjectInfo(
+                name=project_name, directory=project_dir, board_filename=board_filename
+            )
+
+        except Exception as e:
+            logging.warning(f"Could not load board information: {e}")
+            self.project_info = KiCadProjectInfo()
+
+    @property
+    def version(self) -> tuple[int, int, int] | None:
+        """Returns version tuple."""
+        return self.version_info.version_tuple if self.version_info else None
+
+    @property
+    def full_version(self) -> str:
+        """Returns full version string."""
+        return self.version_info.full_version if self.version_info else "Unknown"
+
+    @property
+    def project_name(self) -> str | None:
+        """Returns project name."""
+        return self.project_info.name
+
+    @property
+    def project_dir(self) -> str | None:
+        """Returns project directory as string."""
+        return self.project_info.directory_str
+
+    @property
+    def board_filename(self) -> str | None:
+        """Returns board filename as string."""
+        return self.project_info.board_filename_str
+
+    def get_board_filename(self) -> str | None:
+        """Returns the filename of the current board."""
+        return self.board_filename
+
+    def get_project_dir(self) -> str | None:
+        """Returns the directory of the current KiCad project."""
+        return self.project_dir
+
+    def path_settings(self) -> str:
+        """Returns the settings path as string."""
+        return str(self.settings_path)
+
+    def check_min_version(self, output_func: Callable[[str], None] = print) -> bool:
+        """
+        Checks if the current KiCad version meets the minimum required version.
+
+        Args:
+            output_func: Function for outputting messages (default: print)
+
+        Returns:
+            True if version is sufficient, False otherwise
+        """
+        try:
+            min_version_tuple = self._version_to_tuple(self.min_version)
+
+            if not self.version_info or self.version_info.version_tuple < min_version_tuple:
+                output_func(f"KiCad Version: {self.full_version}")
+                output_func(f"Minimum required KiCad version is {self.min_version}")
+                output_func("This may limit the functionality of the plugin.")
+                return False
+
+            return True
+
+        except Exception as e:
+            logging.error(f"Error during KiCad version check: {e}")
+            return False
+
+    def refresh_project_info(self) -> None:
+        """
+        Refreshes project and board information.
+        Useful when project has changed after initialization.
+        """
+        if self.connection_type == "IPC":
+            self._load_ipc_project_info()
+        elif self.connection_type == "SWIG":
+            self._load_swig_project_info()
+
+    def get_info(self) -> dict[str, Any]:
+        """Returns all loaded information as a dictionary."""
+        return {
+            "connection_type": self.connection_type,
+            "is_connected": self.is_connected,
+            "settings_path": str(self.settings_path),
+            "version": self.version,
+            "full_version": self.full_version,
+            "project_name": self.project_name,
+            "project_dir": self.project_dir,
+            "board_filename": self.board_filename,
+            "min_version": self.min_version,
+            "version_sufficient": self.check_min_version(lambda _: None),
+            "project_valid": self.project_info.is_valid,
+        }
+
+    def print_info(self) -> None:
+        """Prints a formatted summary of all loaded information."""
+        print("=== KiCad Application Information ===")
+        print(f"Connection Type: {self.connection_type}")
+        print(f"Connected: {self.is_connected}")
+        print(f"Settings Path: {self.settings_path}")
+        print(f"Version: {self.full_version}")
+
+        if self.check_min_version(lambda _: None):
+            print("Version meets requirements")
+        else:
+            print("Version may be insufficient")
+
+        if self.is_connected:
+            print("\n=== Project Information ===")
+            if self.project_info.is_valid:
+                if self.project_name:
+                    print(f"Project Name: {self.project_name}")
+                if self.project_dir:
+                    print(f"Project Directory: {self.project_dir}")
+                if self.board_filename:
+                    print(f"Board Filename: {self.board_filename}")
+            else:
+                print("No project currently open or accessible")
+
+
+def connect_kicad() -> Any | None:
+    """
+    Connect to KiCad IPC API
+
+    Returns:
+        KiCad IPC connection object or None if not available
+    """
+    app = KiCadApp(prefer_ipc=True)
+    if app.connection_type == "IPC":
+        return app.kicad_ipc
+    else:
+        logging.warning("Not connected to KiCad IPC API")
+        return None
+
+
+def main() -> None:
+    """Example usage of the simplified KiCad application interface."""
+    # Initialize KiCad app - all properties are loaded automatically
+    app = KiCadApp(prefer_ipc=True, min_version="9.0.0")
+
+    # Direct access to all properties
+    print(f"Connection: {app.connection_type}")
+    print(f"Project: {app.project_name}")
+    print(f"Directory: {app.project_dir}")
+
+    # Or print complete information
+    app.print_info()
+
+    # Check version requirements
+    if not app.check_min_version():
+        print("Version check failed")
+
+    # Refresh project info if needed
+    app.refresh_project_info()
+
+
+if __name__ == "__main__":
+    main()

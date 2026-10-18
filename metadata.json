@@ -1,0 +1,50 @@
+{
+    "$schema": "https://go.kicad.org/pcm/schemas/v1",
+    "name": "KiCad Parts Hub",
+    "description": "Import library files from Octopart, Samacsys, Ultralibrarian, Snapeda and EasyEDA, with built-in SnapEDA/SnapMagic and Component Search Engine (Samacsys) search and a library manager",
+    "description_full": "Unofficial, free and non-commercial community plugin. Search SnapEDA/SnapMagic, Component Search Engine (Samacsys) and EasyEDA/LCSC inside KiCad and import the part straight into your libraries: symbol, footprint, description and 3D model, already linked. Component Search opens one window with a tab per source; SnapEDA and Component Search Engine downloads go through the plugin's own browser window (your own free account), land in a watched folder and are imported automatically, with a notification when it is done. Symbols get the real value (10k Ohm, 100nF) and keep the part number in LCSC Part / MPN. The Library tab lists every imported part with its symbol, footprint and 3D model, previews them (symbol and footprint drawings, VRML meshes and STEP surfaces rebuilt from the STEP topology) and can delete one; its button installs KiCad's KICAD_3RD_PARTY variable and library tables on demand (they are also configured automatically after an import), and broken or missing 3D model links are repaired. Licensed GPL-3.0, based on impartGUI by Steffen-W.",
+    "identifier": "com.github.CapedSaur.kicad-parts-hub",
+    "type": "plugin",
+    "author": {
+        "name": "CapedSaur",
+        "contact": {
+            "web": "https://github.com/CapedSaur/kicad-parts-hub"
+        }
+    },
+    "maintainer": {
+        "name": "CapedSaur",
+        "contact": {
+            "web": "https://github.com/CapedSaur/kicad-parts-hub"
+        }
+    },
+    "license": "GPL-3.0",
+    "resources": {
+        "homepage": "https://github.com/CapedSaur/kicad-parts-hub"
+    },
+    "tags": [
+        "import",
+        "library",
+        "octopart",
+        "samacsys",
+        "ultralibrarian",
+        "snapeda",
+        "snapmagic",
+        "component-search-engine",
+        "easyeda",
+        "search"
+    ],
+    "keep_on_update": [
+        "^/plugins/com.github.CapedSaur.kicad-parts-hub/config\\.ini$",
+        "^/plugins/com.github.CapedSaur.kicad-parts-hub/snapeda_session\\.json$",
+        "^/plugins/com.github.CapedSaur.kicad-parts-hub/cse_session\\.json$",
+        "^/plugins/com.github.CapedSaur.kicad-parts-hub/snapeda_browser_profile/"
+    ],
+    "versions": [
+        {
+            "version": "2026.10.17",
+            "status": "stable",
+            "kicad_version": "9.0",
+            "runtime": "ipc"
+        }
+    ]
+}

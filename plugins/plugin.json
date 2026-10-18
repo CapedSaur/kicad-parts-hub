@@ -1,0 +1,29 @@
+{
+  "$schema": "https://go.kicad.org/api/schemas/v1",
+  "identifier": "com.github.CapedSaur.kicad-parts-hub",
+  "name": "KiCad Parts Hub",
+  "description": "Import library files from Octopart, Samacsys, Ultralibrarian, Snapeda and EasyEDA, with built-in SnapEDA/SnapMagic, Component Search Engine (Samacsys) and EasyEDA/LCSC search and a library manager",
+  "runtime": {
+    "type": "python",
+    "version": "3"
+  },
+  "actions": [
+    {
+      "identifier": "com.github.CapedSaur.kicad-parts-hub",
+      "name": "KiCad Parts Hub (IPC API)",
+      "description": "Component Search (SnapEDA, Component Search Engine, EasyEDA/LCSC) and the library manager",
+      "show-button": true,
+      "scopes": [
+        "schematic",
+        "pcb"
+      ],
+      "entrypoint": "impart_action.py",
+      "icons-light": [
+        "icon_toolbar.png"
+      ],
+      "icons-dark": [
+        "icon_toolbar.png"
+      ]
+    }
+  ]
+}

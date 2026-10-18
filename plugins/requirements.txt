@@ -1,0 +1,26 @@
+# KiCad Plugin Requirements
+# Only external pip dependencies needed at runtime
+
+# IPC API connection to KiCad
+kicad-python>=0.4.0
+
+# Process scanning to detect the active KiCad project.
+# Required on Windows; improves reliability on macOS (handles paths with spaces).
+psutil
+
+# Bundled via git submodule - not installed via pip:
+# - kiutils       (plugins/kiutils/src/kiutils/)
+# - easyeda2kicad (plugins/easyeda2kicad/easyeda2kicad/)
+
+# SVG -> PNG rendering for component preview thumbnails (text support).
+# Optional: without it, SVG previews fall back to wx.svg (shapes only, no text).
+cairosvg
+
+# Decrypting SnapEDA session cookies out of Chrome/Edge (v10/v11, Windows DPAPI).
+# Optional: only needed for the SnapEDA search when the browser is Chromium-based.
+# Firefox cookies are read with the standard library alone.
+cryptography
+
+# Provided by KiCad itself - not installed via pip:
+# - pcbnew   (SWIG bindings)
+# - wxPython (GUI)
